@@ -21,10 +21,6 @@ class ClipPathLayer : public ContainerLayer {
     return clip_behavior_ == Clip::antiAliasWithSaveLayer;
   }
 
-#if defined(OS_FUCHSIA)
-  void UpdateScene(SceneUpdateContext& context) override;
-#endif  // defined(OS_FUCHSIA)
-
  private:
   SkPath clip_path_;
   Clip clip_behavior_;
