@@ -105,6 +105,9 @@ class VulkanProcTable : public fml::RefCountedThreadSafe<VulkanProcTable> {
   DEFINE_PROC(ResetCommandBuffer);
   DEFINE_PROC(ResetFences);
   DEFINE_PROC(WaitForFences);
+  DEFINE_PROC(GetPhysicalDeviceProperties);
+  DEFINE_PROC(GetPhysicalDeviceMemoryProperties);
+  DEFINE_PROC(GetPhysicalDeviceMemoryProperties2);
 #if OS_ANDROID
   DEFINE_PROC(GetPhysicalDeviceSurfaceCapabilitiesKHR);
   DEFINE_PROC(GetPhysicalDeviceSurfaceFormatsKHR);
@@ -117,6 +120,19 @@ class VulkanProcTable : public fml::RefCountedThreadSafe<VulkanProcTable> {
 #if OS_FUCHSIA
   DEFINE_PROC(GetMemoryZirconHandleFUCHSIA);
   DEFINE_PROC(ImportSemaphoreZirconHandleFUCHSIA);
+  DEFINE_PROC(MapMemory);
+  DEFINE_PROC(UnmapMemory);
+  DEFINE_PROC(FlushMappedMemoryRanges);
+  DEFINE_PROC(InvalidateMappedMemoryRanges);
+  DEFINE_PROC(BindBufferMemory);
+  DEFINE_PROC(GetBufferMemoryRequirements);
+  DEFINE_PROC(CreateBuffer);
+  DEFINE_PROC(DestroyBuffer);
+  DEFINE_PROC(CmdCopyBuffer);
+  DEFINE_PROC(GetBufferMemoryRequirements2);
+  DEFINE_PROC(GetImageMemoryRequirements2);
+  DEFINE_PROC(BindBufferMemory2);
+  DEFINE_PROC(BindImageMemory2);
 #endif  // OS_FUCHSIA
 
 #undef DEFINE_PROC

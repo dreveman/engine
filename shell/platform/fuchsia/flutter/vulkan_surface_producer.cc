@@ -19,6 +19,12 @@
 #include "third_party/skia/include/gpu/vk/GrVkExtensions.h"
 #include "third_party/skia/include/gpu/vk/GrVkTypes.h"
 
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#define VMA_STATS_STRING_ENABLED 1
+
+#include "third_party/skia/third_party/vulkanmemoryallocator/GrVulkanMemoryAllocator.h"
+
 namespace flutter_runner {
 
 namespace {
@@ -34,6 +40,208 @@ constexpr int kGrCacheMaxCount = 8192;
 //     (compare it to the bytes value here)
 // then you should consider increasing the size of the GPU resource cache.
 constexpr size_t kGrCacheMaxByteSize = 1024 * 600 * 12 * 4;
+
+class GrVkMemoryAllocatorImpl : public GrVkMemoryAllocator {
+ public:
+  explicit GrVkMemoryAllocatorImpl(VmaAllocator allocator)
+      : allocator_(allocator) {}
+  ~GrVkMemoryAllocatorImpl() override = default;
+
+  GrVkMemoryAllocatorImpl(const GrVkMemoryAllocatorImpl&) = delete;
+  GrVkMemoryAllocatorImpl& operator=(const GrVkMemoryAllocatorImpl&) = delete;
+
+ private:
+  VkResult allocateImageMemory(VkImage image,
+                               AllocationPropertyFlags flags,
+                               GrVkBackendMemory* backend_memory) override {
+    VmaAllocationCreateInfo info;
+    info.flags = 0;
+    info.usage = VMA_MEMORY_USAGE_UNKNOWN;
+    info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    info.preferredFlags = 0;
+    info.memoryTypeBits = 0;
+    info.pool = VK_NULL_HANDLE;
+    info.pUserData = nullptr;
+
+    if (AllocationPropertyFlags::kDedicatedAllocation & flags) {
+      info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    }
+
+    if (AllocationPropertyFlags::kLazyAllocation & flags) {
+      info.preferredFlags |= VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+    }
+
+    if (AllocationPropertyFlags::kProtected & flags) {
+      info.requiredFlags |= VK_MEMORY_PROPERTY_PROTECTED_BIT;
+    }
+
+    VmaAllocation allocation;
+    VkResult result = vmaAllocateMemoryForImage(allocator_, image, &info,
+                                                &allocation, nullptr);
+    if (VK_SUCCESS == result)
+      *backend_memory = reinterpret_cast<GrVkBackendMemory>(allocation);
+
+    MaybeDumpAllocatorStats();
+    return result;
+  }
+
+  VkResult allocateBufferMemory(VkBuffer buffer,
+                                BufferUsage usage,
+                                AllocationPropertyFlags flags,
+                                GrVkBackendMemory* backend_memory) override {
+    VmaAllocationCreateInfo info;
+    info.flags = 0;
+    info.usage = VMA_MEMORY_USAGE_UNKNOWN;
+    info.memoryTypeBits = 0;
+    info.pool = VK_NULL_HANDLE;
+    info.pUserData = nullptr;
+
+    switch (usage) {
+      case BufferUsage::kGpuOnly:
+        info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        info.preferredFlags = 0;
+        break;
+      case BufferUsage::kCpuOnly:
+        info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        info.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        break;
+      case BufferUsage::kCpuWritesGpuReads:
+        info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        info.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        break;
+      case BufferUsage::kGpuWritesCpuReads:
+        info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+        info.preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                              VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        break;
+    }
+
+    if (AllocationPropertyFlags::kDedicatedAllocation & flags) {
+      info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    }
+
+    if ((AllocationPropertyFlags::kLazyAllocation & flags) &&
+        BufferUsage::kGpuOnly == usage) {
+      info.preferredFlags |= VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+    }
+
+    if (AllocationPropertyFlags::kPersistentlyMapped & flags) {
+      SkASSERT(BufferUsage::kGpuOnly != usage);
+      info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    }
+
+    VmaAllocation allocation;
+    VkResult result = vmaAllocateMemoryForBuffer(allocator_, buffer, &info,
+                                                 &allocation, nullptr);
+    if (VK_SUCCESS != result) {
+      if (usage == BufferUsage::kCpuWritesGpuReads) {
+        // We try again but this time drop the requirement for cached
+        info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+        result = vmaAllocateMemoryForBuffer(allocator_, buffer, &info,
+                                            &allocation, nullptr);
+      }
+    }
+
+    if (VK_SUCCESS == result)
+      *backend_memory = reinterpret_cast<GrVkBackendMemory>(allocation);
+
+    MaybeDumpAllocatorStats();
+    return result;
+  }
+
+  void freeMemory(const GrVkBackendMemory& memory) override {
+    vmaFreeMemory(allocator_, reinterpret_cast<const VmaAllocation>(memory));
+  }
+
+  void getAllocInfo(const GrVkBackendMemory& memory,
+                    GrVkAlloc* alloc) const override {
+    const VmaAllocation allocation =
+        reinterpret_cast<const VmaAllocation>(memory);
+    VmaAllocationInfo vma_info;
+    vmaGetAllocationInfo(allocator_, allocation, &vma_info);
+
+    VkMemoryPropertyFlags mem_flags;
+    vmaGetMemoryTypeProperties(allocator_, vma_info.memoryType, &mem_flags);
+
+    uint32_t flags = 0;
+    if (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT & mem_flags) {
+      flags |= GrVkAlloc::kMappable_Flag;
+    }
+    if (!SkToBool(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT & mem_flags)) {
+      flags |= GrVkAlloc::kNoncoherent_Flag;
+    }
+
+    alloc->fMemory = vma_info.deviceMemory;
+    alloc->fOffset = vma_info.offset;
+    alloc->fSize = vma_info.size;
+    alloc->fFlags = flags;
+    alloc->fBackendMemory = memory;
+  }
+
+  VkResult mapMemory(const GrVkBackendMemory& memory, void** data) override {
+    const VmaAllocation allocation =
+        reinterpret_cast<const VmaAllocation>(memory);
+    return vmaMapMemory(allocator_, allocation, data);
+  }
+
+  void unmapMemory(const GrVkBackendMemory& memory) override {
+    const VmaAllocation allocation =
+        reinterpret_cast<const VmaAllocation>(memory);
+    vmaUnmapMemory(allocator_, allocation);
+  }
+
+  VkResult flushMemory(const GrVkBackendMemory& memory,
+                       VkDeviceSize offset,
+                       VkDeviceSize size) override {
+    const VmaAllocation allocation =
+        reinterpret_cast<const VmaAllocation>(memory);
+    return vmaFlushAllocation(allocator_, allocation, offset, size);
+  }
+
+  VkResult invalidateMemory(const GrVkBackendMemory& memory,
+                            VkDeviceSize offset,
+                            VkDeviceSize size) override {
+    const VmaAllocation allocation =
+        reinterpret_cast<const VmaAllocation>(memory);
+    return vmaInvalidateAllocation(allocator_, allocation, offset, size);
+  }
+
+  uint64_t totalUsedMemory() const override {
+    VmaStats stats;
+    vmaCalculateStats(allocator_, &stats);
+    return stats.total.usedBytes;
+  }
+
+  uint64_t totalAllocatedMemory() const override {
+    VmaStats stats;
+    vmaCalculateStats(allocator_, &stats);
+    return stats.total.usedBytes + stats.total.unusedBytes;
+  }
+
+  void MaybeDumpAllocatorStats() {
+    uint64_t total_memory = totalAllocatedMemory();
+    if (total_memory <= max_total_memory_) {
+      return;
+    }
+    max_total_memory_ = total_memory;
+    char *stats_string = nullptr;
+    vmaBuildStatsString(allocator_, &stats_string, true);
+    std::string result(stats_string);
+    vmaFreeStatsString(allocator_, stats_string);
+
+    FML_LOG(INFO) << "Flutter engine VMA Stats (" << total_memory << "): ";
+    std::string line;
+    std::istringstream iss(result);
+    while (std::getline(iss, line)) {
+      FML_LOG(ERROR) << line;
+    }
+  }
+
+  const VmaAllocator allocator_;
+  uint64_t max_total_memory_ = 0u;
+};
 
 }  // namespace
 
@@ -56,6 +264,7 @@ VulkanSurfaceProducer::~VulkanSurfaceProducer() {
         vk_->QueueWaitIdle(logical_device_->GetQueueHandle()));
     FML_DCHECK(wait_result == VK_SUCCESS);
   }
+  vmaDestroyAllocator(vma_allocator_);
 };
 
 bool VulkanSurfaceProducer::Initialize(scenic::Session* scenic_session) {
@@ -115,6 +324,46 @@ bool VulkanSurfaceProducer::Initialize(scenic::Session* scenic_session) {
     return false;
   }
 
+  VmaVulkanFunctions functions = {
+      vk_->GetPhysicalDeviceProperties,
+      vk_->GetPhysicalDeviceMemoryProperties,
+      vk_->AllocateMemory,
+      vk_->FreeMemory,
+      vk_->MapMemory,
+      vk_->UnmapMemory,
+      vk_->FlushMappedMemoryRanges,
+      vk_->InvalidateMappedMemoryRanges,
+      vk_->BindBufferMemory,
+      vk_->BindImageMemory,
+      vk_->GetBufferMemoryRequirements,
+      vk_->GetImageMemoryRequirements,
+      vk_->CreateBuffer,
+      vk_->DestroyBuffer,
+      vk_->CreateImage,
+      vk_->DestroyImage,
+      vk_->CmdCopyBuffer,
+      vk_->GetBufferMemoryRequirements2,
+      vk_->GetImageMemoryRequirements2,
+      vk_->BindBufferMemory2,
+      vk_->BindImageMemory2,
+      vk_->GetPhysicalDeviceMemoryProperties2,
+  };
+  VmaAllocatorCreateInfo allocator_info = {
+      .flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT,
+      .physicalDevice = logical_device_->GetPhysicalDeviceHandle(),
+      .device = logical_device_->GetHandle(),
+      // 4MB was picked for the size here by looking at memory usage of Android
+      // apps and runs of DM. It seems to be a good compromise of not wasting
+      // unused allocated space and not making too many small allocations. The
+      // AMD allocator will start making blocks at 1/8 the max size and builds
+      // up block size as needed before capping at the max set here.
+      .preferredLargeHeapBlockSize = 4 * 1024 * 1024,
+      .pVulkanFunctions = &functions,
+      .instance = application_->GetInstance(),
+      .vulkanApiVersion = application_->GetAPIVersion(),
+  };
+  vmaCreateAllocator(&allocator_info, &vma_allocator_);
+
   GrVkBackendContext backend_context;
   backend_context.fInstance = application_->GetInstance();
   backend_context.fPhysicalDevice = logical_device_->GetPhysicalDeviceHandle();
@@ -127,6 +376,8 @@ bool VulkanSurfaceProducer::Initialize(scenic::Session* scenic_session) {
   backend_context.fFeatures = skia_features;
   backend_context.fGetProc = std::move(getProc);
   backend_context.fOwnsInstanceAndDevice = false;
+  backend_context.fMemoryAllocator = sk_make_sp<GrVkMemoryAllocatorImpl>(vma_allocator_);
+
   // The memory_requirements_2 extension is required on Fuchsia as the AMD
   // memory allocator used by Skia benefit from it.
   const char* device_extensions[] = {

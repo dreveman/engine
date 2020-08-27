@@ -20,6 +20,8 @@
 #include "vulkan_surface.h"
 #include "vulkan_surface_pool.h"
 
+VK_DEFINE_HANDLE(VmaAllocator)
+
 namespace flutter_runner {
 
 class VulkanSurfaceProducer final : public SurfaceProducer,
@@ -64,6 +66,7 @@ class VulkanSurfaceProducer final : public SurfaceProducer,
   sk_sp<GrDirectContext> context_;
   std::unique_ptr<VulkanSurfacePool> surface_pool_;
   bool valid_ = false;
+  VmaAllocator vma_allocator_ = VK_NULL_HANDLE;
 
   // Keep track of the last time we produced a surface.  This is used to
   // determine whether it is safe to shrink |surface_pool_| or not.

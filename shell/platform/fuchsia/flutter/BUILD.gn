@@ -116,6 +116,7 @@ template("runner_sources") {
       "//flutter/common",
       "//flutter/fml",
       "//flutter/vulkan",
+      "//third_party/skia/third_party/vulkanmemoryallocator:vulkanmemoryallocator",
     ]
 
     public_deps = [

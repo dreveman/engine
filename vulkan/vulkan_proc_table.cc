@@ -79,6 +79,9 @@ bool VulkanProcTable::SetupInstanceProcAddresses(
   ACQUIRE_PROC(GetDeviceProcAddr, handle);
   ACQUIRE_PROC(GetPhysicalDeviceFeatures, handle);
   ACQUIRE_PROC(GetPhysicalDeviceQueueFamilyProperties, handle);
+  ACQUIRE_PROC(GetPhysicalDeviceProperties, handle);
+  ACQUIRE_PROC(GetPhysicalDeviceMemoryProperties, handle);
+  ACQUIRE_PROC(GetPhysicalDeviceMemoryProperties2, handle);
 #if OS_ANDROID
   ACQUIRE_PROC(GetPhysicalDeviceSurfaceCapabilitiesKHR, handle);
   ACQUIRE_PROC(GetPhysicalDeviceSurfaceFormatsKHR, handle);
@@ -139,6 +142,19 @@ bool VulkanProcTable::SetupDeviceProcAddresses(
 #if OS_FUCHSIA
   ACQUIRE_PROC(GetMemoryZirconHandleFUCHSIA, handle);
   ACQUIRE_PROC(ImportSemaphoreZirconHandleFUCHSIA, handle);
+  ACQUIRE_PROC(MapMemory, handle);
+  ACQUIRE_PROC(UnmapMemory, handle);
+  ACQUIRE_PROC(FlushMappedMemoryRanges, handle);
+  ACQUIRE_PROC(InvalidateMappedMemoryRanges, handle);
+  ACQUIRE_PROC(BindBufferMemory, handle);
+  ACQUIRE_PROC(GetBufferMemoryRequirements, handle);
+  ACQUIRE_PROC(CreateBuffer, handle);
+  ACQUIRE_PROC(DestroyBuffer, handle);
+  ACQUIRE_PROC(CmdCopyBuffer, handle);
+  ACQUIRE_PROC(GetBufferMemoryRequirements2, handle);
+  ACQUIRE_PROC(GetImageMemoryRequirements2, handle);
+  ACQUIRE_PROC(BindBufferMemory2, handle);
+  ACQUIRE_PROC(BindImageMemory2, handle);
 #endif  // OS_FUCHSIA
   device_ = {handle, nullptr};
   return true;
